@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Çok Katmanlı Perceptron (MLP) ve Backpropagation algoritmasının interaktif görselleştirilmesi. XOR problemi üzerinden canlı eğitim simülasyonu.">
+    <title>MLP & Backpropagation Görselleştirici</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <header>
+        <h1>🧠 MLP & Backpropagation Görselleştirici</h1>
+        <p class="subtitle">XOR Problemi · Genelleştirilmiş Delta Kuralı</p>
+    </header>
+
+    <main>
+        <!-- Left: Network Canvas -->
+        <section id="canvas-section">
+            <canvas id="network-canvas"></canvas>
+            <div id="tooltip" class="tooltip hidden"></div>
+        </section>
+
+        <!-- Right: Control Panel -->
+        <aside id="control-panel">
+            <div class="panel-group">
+                <h2>⚙️ Kontrol Paneli</h2>
+
+                <!-- Training Data -->
+                <div class="control-block">
+                    <h3>XOR Eğitim Verisi</h3>
+                    <div class="xor-table">
+                        <div class="xor-header">
+                            <span>x₁</span><span>x₂</span><span>d (hedef)</span>
+                        </div>
+                        <div class="xor-row" data-idx="0"><span>0</span><span>0</span><span>0</span></div>
+                        <div class="xor-row" data-idx="1"><span>0</span><span>1</span><span>1</span></div>
+                        <div class="xor-row" data-idx="2"><span>1</span><span>0</span><span>1</span></div>
+                        <div class="xor-row" data-idx="3"><span>1</span><span>1</span><span>0</span></div>
+                    </div>
+                </div>
+
+                <!-- Heuristics -->
+                <div class="control-block">
+                    <h3>Hiperparametreler</h3>
+                    <div class="slider-group">
+                        <label for="learning-rate">Öğrenme Oranı (η)</label>
+                        <div class="slider-row">
+                            <input type="range" id="learning-rate" min="0.01" max="5.0" step="0.01" value="0.5">
+                            <span id="lr-value" class="slider-val">0.50</span>
+                        </div>
+                    </div>
+                    <div class="slider-group">
+                        <label for="momentum">Momentum (α)</label>
+                        <div class="slider-row">
+                            <input type="range" id="momentum" min="0.0" max="0.99" step="0.01" value="0.0">
+                            <span id="mom-value" class="slider-val">0.00</span>
+                        </div>
+                    </div>
+                    <div class="select-group">
+                        <label for="activation-fn">Aktivasyon Fonksiyonu</label>
+                        <select id="activation-fn">
+                            <option value="sigmoid">Sigmoid: φ(v) = 1/(1+e⁻ᵛ)</option>
+                            <option value="tanh">Tanh: φ(v) = tanh(v)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Training Controls -->
+                <div class="control-block">
+                    <h3>Eğitim Kontrolleri</h3>
+                    <div class="btn-group">
+                        <button id="btn-step" class="btn btn-primary">
+                            <span class="btn-icon">▶</span> Adım (1 Epoch)
+                        </button>
+                        <button id="btn-train" class="btn btn-accent">
+                            <span class="btn-icon">⏩</span> Eğit (Sürekli)
+                        </button>
+                        <button id="btn-stop" class="btn btn-warning" disabled>
+                            <span class="btn-icon">⏹</span> Durdur
+                        </button>
+                    </div>
+                    <div class="btn-group">
+                        <button id="btn-shuffle" class="btn btn-secondary">
+                            <span class="btn-icon">🔀</span> Shuffle
+                        </button>
+                        <button id="btn-reset" class="btn btn-danger">
+                            <span class="btn-icon">🔄</span> Sıfırla
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Network Output -->
+                <div class="control-block">
+                    <h3>Ağ Çıktıları</h3>
+                    <div id="network-outputs" class="output-grid">
+                        <div class="output-row">
+                            <span class="out-label">[0,0]→</span>
+                            <span class="out-value" id="out-00">-</span>
+                            <span class="out-target">hedef: 0</span>
+                        </div>
+                        <div class="output-row">
+                            <span class="out-label">[0,1]→</span>
+                            <span class="out-value" id="out-01">-</span>
+                            <span class="out-target">hedef: 1</span>
+                        </div>
+                        <div class="output-row">
+                            <span class="out-label">[1,0]→</span>
+                            <span class="out-value" id="out-10">-</span>
+                            <span class="out-target">hedef: 1</span>
+                        </div>
+                        <div class="output-row">
+                            <span class="out-label">[1,1]→</span>
+                            <span class="out-value" id="out-11">-</span>
+                            <span class="out-target">hedef: 0</span>
+                        </div>
+                    </div>
+                    <div class="stats-row">
+                        <span>Epoch: <strong id="epoch-count">0</strong></span>
+                        <span>E<sub>av</sub>: <strong id="mse-value">-</strong></span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+    </main>
+
+    <!-- Bottom: MSE Chart -->
+    <section id="chart-section">
+        <h2>📉 Ortalama Karesel Hata (E<sub>av</sub>) Grafiği</h2>
+        <div class="chart-container">
+            <canvas id="mse-chart"></canvas>
+        </div>
+    </section>
+
+    <!-- Formulas footer -->
+    <footer>
+        <div class="formula-strip">
+            <span>e<sub>j</sub>(n) = d<sub>j</sub>(n) − y<sub>j</sub>(n)</span>
+            <span>δ<sub>j</sub> = e<sub>j</sub> · φ'(v<sub>j</sub>)</span>
+            <span>Δw<sub>ji</sub>(n) = η · δ<sub>j</sub> · y<sub>i</sub> + α · Δw<sub>ji</sub>(n−1)</span>
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script src="{{ url_for('static', filename='js/mlp.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/canvas.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
