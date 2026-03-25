@@ -12,7 +12,7 @@
 <body>
     <header>
         <h1>🧠 MLP & Backpropagation Görselleştirici</h1>
-        <p class="subtitle">XOR Problemi · Genelleştirilmiş Delta Kuralı</p>
+        <p class="subtitle">XOR Problemi · Genelleştirilmiş Delta Kuralı · Canlı Simülasyon</p>
     </header>
 
     <main>
@@ -58,6 +58,13 @@
                             <span id="mom-value" class="slider-val">0.00</span>
                         </div>
                     </div>
+                    <div class="slider-group">
+                        <label for="train-speed">Eğitim Hızı</label>
+                        <div class="slider-row">
+                            <input type="range" id="train-speed" min="1" max="100" step="1" value="10">
+                            <span id="speed-value" class="slider-val">10x</span>
+                        </div>
+                    </div>
                     <div class="select-group">
                         <label for="activation-fn">Aktivasyon Fonksiyonu</label>
                         <select id="activation-fn">
@@ -72,10 +79,10 @@
                     <h3>Eğitim Kontrolleri</h3>
                     <div class="btn-group">
                         <button id="btn-step" class="btn btn-primary">
-                            <span class="btn-icon">▶</span> Adım (1 Epoch)
+                            <span class="btn-icon">▶</span> Adım
                         </button>
                         <button id="btn-train" class="btn btn-accent">
-                            <span class="btn-icon">⏩</span> Eğit (Sürekli)
+                            <span class="btn-icon">⏩</span> Eğit
                         </button>
                         <button id="btn-stop" class="btn btn-warning" disabled>
                             <span class="btn-icon">⏹</span> Durdur
@@ -121,15 +128,33 @@
                         <span>E<sub>av</sub>: <strong id="mse-value">-</strong></span>
                     </div>
                 </div>
+
+                <!-- Math Board -->
+                <div class="control-block math-board-block">
+                    <div id="math-board">
+                        <div class="mb-title">📐 Hesaplama Tahtası</div>
+                        <div class="mb-label">Eğitim başladığında burada canlı formüller görünecek.</div>
+                    </div>
+                </div>
             </div>
         </aside>
     </main>
 
-    <!-- Bottom: MSE Chart -->
+    <!-- Bottom: Charts Row -->
     <section id="chart-section">
-        <h2>📉 Ortalama Karesel Hata (E<sub>av</sub>) Grafiği</h2>
-        <div class="chart-container">
-            <canvas id="mse-chart"></canvas>
+        <div class="charts-grid">
+            <div class="chart-card">
+                <h3>📉 Ortalama Karesel Hata (E<sub>av</sub>)</h3>
+                <div class="chart-container">
+                    <canvas id="mse-chart"></canvas>
+                </div>
+            </div>
+            <div class="chart-card boundary-card">
+                <h3>🗺️ Karar Sınırı (Decision Boundary)</h3>
+                <div class="boundary-container">
+                    <canvas id="boundary-canvas"></canvas>
+                </div>
+            </div>
         </div>
     </section>
 
@@ -142,9 +167,19 @@
         </div>
     </footer>
 
+    <!-- Convergence Celebration Overlay -->
+    <div id="convergence-overlay" class="convergence-overlay">
+        <div class="convergence-text">
+            <span class="celebration-emoji">🎉</span>
+            <h2>Yakınsama Başarılı!</h2>
+            <p>E<sub>av</sub> < 0.01 — Ağ XOR'u öğrendi!</p>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <script src="/static/js/mlp.js"></script>
     <script src="/static/js/canvas.js"></script>
+    <script src="/static/js/decision_boundary.js"></script>
     <script src="/static/js/app.js"></script>
 </body>
 </html>

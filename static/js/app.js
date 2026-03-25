@@ -1,7 +1,8 @@
 /* ========================================
    app.js - Main Application Controller
    Ties together MLP engine, Canvas renderer,
-   Chart.js MSE graph, and UI controls.
+   Decision Boundary, Math Board, Chart.js,
+   and all UI controls.
    ======================================== */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -18,14 +19,18 @@ document.addEventListener('DOMContentLoaded', () => {
     let isTraining = false;
     let trainInterval = null;
     let animationFrameId = null;
+    let epochsPerTick = 10;
+    let hasConverged = false;
 
-    // --- Initialize MLP & Renderer ---
+    // --- Initialize MLP, Renderers ---
     const mlp = new MLP();
     const renderer = new CanvasRenderer('network-canvas', mlp);
+    const boundary = new DecisionBoundary('boundary-canvas', mlp);
 
-    // Run initial forward pass so neurons have values to display
+    // Run initial forward pass
     mlp.forward([0, 0]);
     renderer.draw();
+    boundary.draw();
 
     // --- Chart.js Setup ---
     const chartCtx = document.getElementById('mse-chart').getContext('2d');
@@ -91,6 +96,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const momSlider = document.getElementById('momentum');
     const momValue = document.getElementById('mom-value');
     const activationSelect = document.getElementById('activation-fn');
+    const speedSlider = document.getElementById('train-speed');
+    const speedValue = document.getElementById('speed-value');
     const btnStep = document.getElementById('btn-step');
     const btnTrain = document.getElementById('btn-train');
     const btnStop = document.getElementById('btn-stop');
@@ -98,6 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnReset = document.getElementById('btn-reset');
     const epochCount = document.getElementById('epoch-count');
     const mseValue = document.getElementById('mse-value');
+    const mathBoard = document.getElementById('math-board');
 
     // --- Slider Events ---
     lrSlider.addEventListener('input', () => {
@@ -114,6 +122,73 @@ document.addEventListener('DOMContentLoaded', () => {
         mlp.activationFn = activationSelect.value;
     });
 
+    speedSlider.addEventListener('input', () => {
+        epochsPerTick = parseInt(speedSlider.value);
+        speedValue.textContent = epochsPerTick + 'x';
+    });
+
+    // --- Math Board ---
+    function updateMathBoard(input, target) {
+        if (!mathBoard) return;
+        const state = mlp.getNetworkState();
+        const fnName = mlp.activationFn === 'tanh' ? 'tanh' : 'σ';
+        const x1 = input[0], x2 = input[1];
+
+        let html = '<div class="mb-title">📐 Son Hesaplama Adımları</div>';
+        html += `<div class="mb-label">Giriş: x₁=${x1}, x₂=${x2} | Hedef: d=${target[0]}</div>`;
+
+        // Hidden layer
+        if (state.nets[0] && state.outputs[1]) {
+            html += '<div class="mb-section">▸ İleri Geçiş (Gizli Katman)</div>';
+            for (let j = 0; j < mlp.layers[1]; j++) {
+                const w1 = mlp.weights[0][j][0];
+                const w2 = mlp.weights[0][j][1];
+                const b = mlp.biases[0][j];
+                const net = state.nets[0][j];
+                const y = state.outputs[1][j];
+                html += `<div class="mb-calc">net<sub>h${j+1}</sub> = <span class="mb-w">${w1.toFixed(2)}</span>·${x1} + <span class="mb-w">${w2.toFixed(2)}</span>·${x2} + <span class="mb-b">${b.toFixed(2)}</span> = <span class="mb-r">${net.toFixed(3)}</span></div>`;
+                html += `<div class="mb-calc">y<sub>h${j+1}</sub> = ${fnName}(${net.toFixed(3)}) = <span class="mb-v">${y.toFixed(5)}</span></div>`;
+            }
+        }
+
+        // Output layer
+        if (state.nets[1] && state.outputs[2]) {
+            html += '<div class="mb-section">▸ İleri Geçiş (Çıkış)</div>';
+            const w1 = mlp.weights[1][0][0];
+            const w2 = mlp.weights[1][0][1];
+            const b = mlp.biases[1][0];
+            const h1 = state.outputs[1][0];
+            const h2 = state.outputs[1][1];
+            const net = state.nets[1][0];
+            const y = state.outputs[2][0];
+            html += `<div class="mb-calc">net<sub>y</sub> = <span class="mb-w">${w1.toFixed(2)}</span>·<span class="mb-v">${h1.toFixed(3)}</span> + <span class="mb-w">${w2.toFixed(2)}</span>·<span class="mb-v">${h2.toFixed(3)}</span> + <span class="mb-b">${b.toFixed(2)}</span> = <span class="mb-r">${net.toFixed(3)}</span></div>`;
+            html += `<div class="mb-calc">y = ${fnName}(${net.toFixed(3)}) = <span class="mb-v">${y.toFixed(5)}</span></div>`;
+        }
+
+        // Error & backprop
+        if (state.errors.length > 0 && state.deltas.length > 0) {
+            const e = state.errors[0];
+            const y = state.outputs[2]?.[0] || 0;
+            const phiPrime = mlp.activationDerivative(y);
+            const deltaOut = state.deltas[1]?.[0] || 0;
+
+            html += '<div class="mb-section">▸ Hata & Geri Yayılım</div>';
+            html += `<div class="mb-calc"><span class="mb-e">e = d − y = ${target[0]} − ${y.toFixed(5)} = ${e.toFixed(5)}</span></div>`;
+            html += `<div class="mb-calc">φ'(v) = ${phiPrime.toFixed(5)}</div>`;
+            html += `<div class="mb-calc"><span class="mb-d">δ<sub>çıkış</sub> = e · φ'(v) = ${e.toFixed(4)} × ${phiPrime.toFixed(4)} = ${deltaOut.toFixed(6)}</span></div>`;
+
+            // Hidden deltas
+            if (state.deltas[0]) {
+                for (let j = 0; j < mlp.layers[1]; j++) {
+                    const dh = state.deltas[0][j];
+                    html += `<div class="mb-calc"><span class="mb-d">δ<sub>h${j+1}</sub> = ${dh.toFixed(6)}</span></div>`;
+                }
+            }
+        }
+
+        mathBoard.innerHTML = html;
+    }
+
     // --- Training Functions ---
 
     function runOneEpoch() {
@@ -125,15 +200,23 @@ document.addEventListener('DOMContentLoaded', () => {
         mseData.datasets[0].data.push(eav);
         mseChart.update();
 
-        // Update stats
         epochCount.textContent = epoch;
         mseValue.textContent = eav.toFixed(6);
 
-        // Update network outputs display
         updateOutputDisplay();
+        highlightXorRow(-1);
 
-        // Highlight active XOR row (last one trained)
-        highlightXorRow(-1); // clear
+        // Update math board with last sample
+        const lastSample = trainingData[trainingData.length - 1];
+        mlp.forward(lastSample.slice(0, 2));
+        mlp.backward(lastSample.slice(2));
+        updateMathBoard(lastSample.slice(0, 2), lastSample.slice(2));
+
+        // Check convergence
+        if (eav < 0.01 && !hasConverged) {
+            hasConverged = true;
+            showConvergenceCelebration();
+        }
 
         return eav;
     }
@@ -147,7 +230,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const el = document.getElementById(ids[i]);
             el.textContent = output[0].toFixed(5);
 
-            // Color based on correctness
             const target = XOR_DATA[i][2];
             const error = Math.abs(target - output[0]);
             if (error < 0.1) {
@@ -167,6 +249,27 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // --- Convergence Celebration ---
+    function showConvergenceCelebration() {
+        const overlay = document.getElementById('convergence-overlay');
+        if (overlay) {
+            overlay.classList.add('show');
+            // Create confetti
+            for (let i = 0; i < 50; i++) {
+                const confetti = document.createElement('div');
+                confetti.className = 'confetti-piece';
+                confetti.style.left = Math.random() * 100 + '%';
+                confetti.style.animationDelay = Math.random() * 2 + 's';
+                confetti.style.backgroundColor = ['#00e5ff', '#a855f7', '#22d3ae', '#ff9f43', '#ff4ecd', '#4ea8ff'][Math.floor(Math.random() * 6)];
+                overlay.appendChild(confetti);
+            }
+            setTimeout(() => {
+                overlay.classList.remove('show');
+                overlay.querySelectorAll('.confetti-piece').forEach(c => c.remove());
+            }, 4000);
+        }
+    }
+
     // --- Animated Step (1 Epoch with animation) ---
 
     function animatedStep() {
@@ -177,8 +280,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const input = sample.slice(0, 2);
         const target = sample.slice(2);
 
+        // Highlight XOR row
+        const sampleIdx = XOR_DATA.findIndex(s => s[0] === input[0] && s[1] === input[1]);
+        highlightXorRow(sampleIdx);
+
         // Forward pass
         mlp.forward(input);
+        updateMathBoard(input, target);
         renderer.spawnForwardParticles();
 
         let phase = 'forward';
@@ -190,6 +298,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!alive) {
                     // Backward pass
                     mlp.backward(target);
+                    updateMathBoard(input, target);
                     renderer.spawnBackwardParticles();
                     phase = 'backward';
                 }
@@ -198,16 +307,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 const alive = renderer.updateParticles();
                 renderer.draw();
                 if (!alive) {
-                    // Update weights and run full epoch
                     renderer.clearParticles();
+                    renderer.showGradientFlow = true;
                     mlp.updateWeights();
-                    // Now run the rest of the epoch
+
+                    // Train remaining samples
                     for (let i = 1; i < trainingData.length; i++) {
                         const s = trainingData[i];
                         mlp.trainSample(s.slice(0, 2), s.slice(2));
                     }
                     epoch++;
-                    // Calculate Eav for this epoch
+
+                    // Calculate Eav
                     let totalErr = 0;
                     for (const s of trainingData) {
                         const out = mlp.forward(s.slice(0, 2));
@@ -222,7 +333,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     epochCount.textContent = epoch;
                     mseValue.textContent = eav.toFixed(6);
                     updateOutputDisplay();
+                    boundary.draw();
                     renderer.draw();
+
+                    if (eav < 0.01 && !hasConverged) {
+                        hasConverged = true;
+                        showConvergenceCelebration();
+                    }
 
                     btnStep.disabled = false;
                     btnTrain.disabled = false;
@@ -244,10 +361,10 @@ document.addEventListener('DOMContentLoaded', () => {
         btnStop.disabled = false;
 
         trainInterval = setInterval(() => {
-            // Run multiple epochs per tick for speed
-            for (let i = 0; i < 10; i++) {
+            for (let i = 0; i < epochsPerTick; i++) {
                 runOneEpoch();
             }
+            boundary.draw();
             renderer.draw();
         }, 50);
     }
@@ -273,9 +390,10 @@ document.addEventListener('DOMContentLoaded', () => {
         stopTraining();
         mlp.initWeights();
         epoch = 0;
+        hasConverged = false;
         trainingData = [...XOR_DATA];
+        renderer.showGradientFlow = false;
 
-        // Clear chart
         mseData.labels = [];
         mseData.datasets[0].data = [];
         mseChart.update();
@@ -283,24 +401,24 @@ document.addEventListener('DOMContentLoaded', () => {
         epochCount.textContent = '0';
         mseValue.textContent = '-';
 
-        // Reset outputs
         ['out-00', 'out-01', 'out-10', 'out-11'].forEach(id => {
             const el = document.getElementById(id);
             el.textContent = '-';
             el.style.color = '#00e5ff';
         });
 
+        if (mathBoard) mathBoard.innerHTML = '<div class="mb-title">📐 Hesaplama Tahtası</div><div class="mb-label">Eğitim başladığında burada canlı formüller görünecek.</div>';
+
         mlp.forward([0, 0]);
         renderer.draw();
+        boundary.draw();
     }
 
     function shuffleData() {
-        // Fisher-Yates shuffle
         for (let i = trainingData.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [trainingData[i], trainingData[j]] = [trainingData[j], trainingData[i]];
         }
-        // Flash shuffle button
         btnShuffle.style.boxShadow = '0 0 20px rgba(168, 85, 247, 0.5)';
         setTimeout(() => { btnShuffle.style.boxShadow = ''; }, 300);
     }
@@ -312,7 +430,7 @@ document.addEventListener('DOMContentLoaded', () => {
     btnShuffle.addEventListener('click', shuffleData);
     btnReset.addEventListener('click', resetNetwork);
 
-    // --- Idle animation loop (always render canvas) ---
+    // --- Idle animation loop ---
     function idleRender() {
         if (!isTraining) {
             renderer.draw();

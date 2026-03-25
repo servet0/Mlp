@@ -1,8 +1,9 @@
 /* ========================================
    canvas.js - Neural Network Canvas Renderer
-   Draws neurons, weights (connections),
+   Draws neurons with activation heat coloring,
+   weight connections, gradient flow visualization,
    forward/backward pass particle animations,
-   and hover tooltips.
+   bias labels, and hover tooltips.
    ======================================== */
 
 class CanvasRenderer {
@@ -14,17 +15,22 @@ class CanvasRenderer {
 
         // Layout
         this.neuronPositions = []; // [layer][index] = {x, y}
-        this.neuronRadius = 28;
+        this.neuronRadius = 30;
 
         // Animation particles
         this.particles = [];
-        this.animating = false;
         this.animationPhase = null; // 'forward', 'backward', null
 
+        // Gradient flow mode
+        this.showGradientFlow = false;
+
         // Hover
-        this.hoveredNeuron = null; // {layer, index}
+        this.hoveredNeuron = null;
         this.mouseX = 0;
         this.mouseY = 0;
+
+        // Time for ambient animation
+        this.time = 0;
 
         // Colors
         this.colors = {
@@ -85,20 +91,18 @@ class CanvasRenderer {
         const usableH = this.height;
 
         this.neuronPositions = [];
-        const layerLabels = ['Giriş', 'Gizli', 'Çıkış'];
 
         for (let l = 0; l < numLayers; l++) {
             this.neuronPositions[l] = [];
             const x = marginX + (usableW / (numLayers - 1)) * l;
             const count = layers[l];
-            const totalH = (count - 1) * 90;
+            const totalH = (count - 1) * 100;
             const startY = (usableH - totalH) / 2;
 
             for (let n = 0; n < count; n++) {
                 this.neuronPositions[l][n] = {
                     x: x,
-                    y: startY + n * 90,
-                    label: layerLabels[l]
+                    y: startY + n * 100
                 };
             }
         }
@@ -111,7 +115,7 @@ class CanvasRenderer {
                 const pos = this.neuronPositions[l][n];
                 const dx = this.mouseX - pos.x;
                 const dy = this.mouseY - pos.y;
-                if (dx * dx + dy * dy < (this.neuronRadius + 5) * (this.neuronRadius + 5)) {
+                if (dx * dx + dy * dy < (this.neuronRadius + 8) * (this.neuronRadius + 8)) {
                     this.hoveredNeuron = { layer: l, index: n };
                     this._showTooltip(l, n, pos);
                     return;
@@ -131,7 +135,7 @@ class CanvasRenderer {
 
         const output = this.mlp.getOutput(layer, index);
         if (output !== null) {
-            html += `y = ${output.toFixed(5)}<br>`;
+            html += `<span style="color:#00e5ff">y = ${output.toFixed(5)}</span><br>`;
         }
 
         const net = this.mlp.getNet(layer, index);
@@ -139,18 +143,31 @@ class CanvasRenderer {
             html += `net = ${net.toFixed(5)}<br>`;
         }
 
+        // Show bias for non-input neurons
+        if (layer > 0) {
+            const bias = this.mlp.biases[layer - 1]?.[index];
+            if (bias !== undefined) {
+                html += `<span style="color:#a855f7">bias = ${bias.toFixed(5)}</span><br>`;
+            }
+        }
+
         const delta = this.mlp.getDelta(layer, index);
         if (delta !== null) {
-            html += `<span style="color:#ff9f43">δ = ${delta.toFixed(6)}</span>`;
+            html += `<span style="color:#ff9f43">δ = ${delta.toFixed(6)}</span><br>`;
+
+            // Show activation derivative
+            if (output !== null) {
+                const phiPrime = this.mlp.activationDerivative(output);
+                html += `<span style="color:#606088">φ'(v) = ${phiPrime.toFixed(6)}</span>`;
+            }
         }
 
         tooltip.innerHTML = html;
         tooltip.classList.remove('hidden');
 
-        // Position tooltip
-        let tx = pos.x + this.neuronRadius + 15;
-        let ty = pos.y - 30;
-        if (tx + 180 > this.width) tx = pos.x - 195;
+        let tx = pos.x + this.neuronRadius + 18;
+        let ty = pos.y - 40;
+        if (tx + 200 > this.width) tx = pos.x - 215;
         if (ty < 10) ty = 10;
         tooltip.style.left = tx + 'px';
         tooltip.style.top = ty + 'px';
@@ -161,9 +178,38 @@ class CanvasRenderer {
         if (tooltip) tooltip.classList.add('hidden');
     }
 
+    // --- Activation Heat Color ---
+    _activationColor(value) {
+        // Maps activation [0,1] to cold→hot gradient
+        // 0.0 = deep blue, 0.5 = purple/neutral, 1.0 = bright orange
+        const t = Math.max(0, Math.min(1, value));
+        let r, g, b;
+        if (t < 0.5) {
+            const s = t / 0.5;
+            r = Math.floor(30 + s * 100);
+            g = Math.floor(40 + s * 30);
+            b = Math.floor(200 - s * 80);
+        } else {
+            const s = (t - 0.5) / 0.5;
+            r = Math.floor(130 + s * 125);
+            g = Math.floor(70 + s * 100);
+            b = Math.floor(120 - s * 90);
+        }
+        return `rgb(${r},${g},${b})`;
+    }
+
+    _activationGlow(value) {
+        const t = Math.max(0, Math.min(1, value));
+        if (t < 0.5) {
+            return `rgba(30,40,200,${0.2 + t * 0.4})`;
+        }
+        return `rgba(255,170,30,${0.2 + (t - 0.5) * 0.8})`;
+    }
+
     // ---------- Drawing ----------
 
     draw() {
+        this.time += 0.02;
         const ctx = this.ctx;
         ctx.clearRect(0, 0, this.width, this.height);
 
@@ -185,14 +231,35 @@ class CanvasRenderer {
                     const from = this.neuronPositions[l][i];
                     const to = this.neuronPositions[l + 1][j];
 
-                    // Thickness proportional to |w|
                     const absW = Math.abs(w);
-                    const thickness = Math.max(1, (absW / (maxW || 1)) * 6);
-
-                    // Color: positive=blue, negative=red
+                    const thickness = Math.max(1, (absW / (maxW || 1)) * 7);
                     const color = w >= 0 ? this.colors.weightPositive : this.colors.weightNegative;
-                    const alpha = Math.min(0.9, 0.2 + (absW / (maxW || 1)) * 0.7);
+                    const alpha = Math.min(0.9, 0.15 + (absW / (maxW || 1)) * 0.75);
 
+                    // Gradient flow glow (during/after backward pass)
+                    if (this.showGradientFlow && state.deltas.length > 0) {
+                        const deltaIdx = l;  // delta index for layer l+1
+                        const delta = state.deltas[deltaIdx]?.[j];
+                        if (delta !== undefined) {
+                            const absDelta = Math.abs(delta);
+                            const glowIntensity = Math.min(1, absDelta * 8);
+                            if (glowIntensity > 0.05) {
+                                ctx.save();
+                                ctx.beginPath();
+                                ctx.moveTo(from.x, from.y);
+                                ctx.lineTo(to.x, to.y);
+                                ctx.strokeStyle = '#ff9f43';
+                                ctx.globalAlpha = glowIntensity * 0.5;
+                                ctx.lineWidth = thickness + 6;
+                                ctx.shadowColor = '#ff9f43';
+                                ctx.shadowBlur = 15;
+                                ctx.stroke();
+                                ctx.restore();
+                            }
+                        }
+                    }
+
+                    // Main connection line
                     ctx.beginPath();
                     ctx.moveTo(from.x, from.y);
                     ctx.lineTo(to.x, to.y);
@@ -202,14 +269,15 @@ class CanvasRenderer {
                     ctx.stroke();
                     ctx.globalAlpha = 1.0;
 
-                    // Weight value label at midpoint
+                    // Weight label at midpoint with offset to avoid overlap
+                    const offsetY = (i - (state.layers[l] - 1) / 2) * 12;
                     const mx = (from.x + to.x) / 2;
-                    const my = (from.y + to.y) / 2;
+                    const my = (from.y + to.y) / 2 + offsetY;
                     ctx.font = '10px "JetBrains Mono", monospace';
                     ctx.fillStyle = color;
-                    ctx.globalAlpha = 0.75;
+                    ctx.globalAlpha = 0.8;
                     ctx.textAlign = 'center';
-                    ctx.fillText(w.toFixed(2), mx, my - 5);
+                    ctx.fillText(w.toFixed(2), mx, my - 6);
                     ctx.globalAlpha = 1.0;
                 }
             }
@@ -238,55 +306,106 @@ class CanvasRenderer {
                     this.hoveredNeuron.layer === l &&
                     this.hoveredNeuron.index === n;
 
-                // Choose color by layer type
-                let strokeColor, glowColor;
+                const output = this.mlp.getOutput(l, n);
+
+                // Choose colors
+                let strokeColor, glowColor, fillColor;
                 if (l === 0) {
                     strokeColor = this.colors.neuronInputStroke;
                     glowColor = this.colors.neuronInputGlow;
+                    fillColor = this.colors.neuronFill;
                 } else if (l === state.layers.length - 1) {
                     strokeColor = this.colors.neuronOutputStroke;
                     glowColor = this.colors.neuronOutputGlow;
+                    // Heat color for output
+                    fillColor = output !== null ? this._activationColor(output) : this.colors.neuronFill;
                 } else {
                     strokeColor = this.colors.neuronStroke;
                     glowColor = this.colors.neuronGlow;
+                    // Heat color for hidden
+                    fillColor = output !== null ? this._activationColor(output) : this.colors.neuronFill;
                 }
 
-                // Outer glow
-                const glowRadius = isHovered ? 25 : 15;
-                const gradient = ctx.createRadialGradient(pos.x, pos.y, r * 0.5, pos.x, pos.y, r + glowRadius);
-                gradient.addColorStop(0, glowColor);
+                // Activation-based glow
+                const activGlow = (output !== null && l > 0) ? this._activationGlow(output) : glowColor;
+                const glowRadius = isHovered ? 28 : 18;
+                const pulseOffset = Math.sin(this.time * 2 + l + n) * 3;
+
+                const gradient = ctx.createRadialGradient(
+                    pos.x, pos.y, r * 0.3,
+                    pos.x, pos.y, r + glowRadius + pulseOffset
+                );
+                gradient.addColorStop(0, activGlow);
                 gradient.addColorStop(1, 'transparent');
                 ctx.beginPath();
-                ctx.arc(pos.x, pos.y, r + glowRadius, 0, Math.PI * 2);
+                ctx.arc(pos.x, pos.y, r + glowRadius + pulseOffset, 0, Math.PI * 2);
                 ctx.fillStyle = gradient;
                 ctx.fill();
 
-                // Neuron body
+                // Neuron body — activation heat fill
                 ctx.beginPath();
                 ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
-                ctx.fillStyle = this.colors.neuronFill;
+                ctx.fillStyle = fillColor;
                 ctx.fill();
                 ctx.strokeStyle = strokeColor;
-                ctx.lineWidth = isHovered ? 3 : 2;
+                ctx.lineWidth = isHovered ? 3.5 : 2;
                 ctx.stroke();
 
+                // Inner ring (subtle)
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, r - 4, 0, Math.PI * 2);
+                ctx.strokeStyle = strokeColor;
+                ctx.globalAlpha = 0.15;
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                ctx.globalAlpha = 1.0;
+
                 // Value inside neuron
-                const output = this.mlp.getOutput(l, n);
                 if (output !== null) {
-                    ctx.font = 'bold 11px "JetBrains Mono", monospace';
-                    ctx.fillStyle = this.colors.text;
+                    ctx.font = 'bold 12px "JetBrains Mono", monospace';
+                    ctx.fillStyle = '#fff';
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     ctx.fillText(output.toFixed(3), pos.x, pos.y);
                 }
 
-                // Neuron label below
+                // Neuron label & bias below
                 const labels = ['x', 'h', 'y'];
-                ctx.font = '10px "Inter", sans-serif';
+                const neuronLabel = `${labels[l]}${n + 1}`;
+                ctx.font = '11px "Inter", sans-serif';
                 ctx.fillStyle = this.colors.textMuted;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'top';
-                ctx.fillText(`${labels[l]}${l > 0 ? (n + 1) : (n + 1)}`, pos.x, pos.y + r + 6);
+                ctx.fillText(neuronLabel, pos.x, pos.y + r + 6);
+
+                // Show bias for hidden/output neurons
+                if (l > 0) {
+                    const bias = this.mlp.biases[l - 1]?.[n];
+                    if (bias !== undefined) {
+                        ctx.font = '9px "JetBrains Mono", monospace';
+                        ctx.fillStyle = '#a855f7';
+                        ctx.globalAlpha = 0.7;
+                        ctx.fillText(`b=${bias.toFixed(2)}`, pos.x, pos.y + r + 20);
+                        ctx.globalAlpha = 1.0;
+                    }
+                }
+
+                // Delta badge (show during/after backward)
+                if (l > 0) {
+                    const delta = this.mlp.getDelta(l, n);
+                    if (delta !== null && this.showGradientFlow) {
+                        const absDelta = Math.abs(delta);
+                        const badgeAlpha = Math.min(1, 0.4 + absDelta * 6);
+
+                        ctx.save();
+                        ctx.globalAlpha = badgeAlpha;
+                        ctx.font = 'bold 9px "JetBrains Mono", monospace';
+                        ctx.fillStyle = '#ff9f43';
+                        ctx.textAlign = 'center';
+                        ctx.fillText(`δ=${delta.toFixed(4)}`, pos.x, pos.y - r - 10);
+                        ctx.restore();
+                    }
+                }
             }
         }
     }
@@ -300,14 +419,22 @@ class CanvasRenderer {
             ctx.font = '600 12px "Inter", sans-serif';
             ctx.fillStyle = this.colors.textMuted;
             ctx.textAlign = 'center';
-            ctx.fillText(labels[l], pos.x, 25);
+            ctx.fillText(labels[l], pos.x, 20);
         }
+
+        // Show activation function label
+        const fnLabel = this.mlp.activationFn === 'tanh' ? 'φ = tanh' : 'φ = sigmoid';
+        ctx.font = '10px "JetBrains Mono", monospace';
+        ctx.fillStyle = '#606088';
+        ctx.textAlign = 'left';
+        ctx.fillText(fnLabel, 10, this.height - 10);
     }
 
     // ---------- Particle Animations ----------
 
     spawnForwardParticles() {
         this.animationPhase = 'forward';
+        this.showGradientFlow = false;
         this.particles = [];
         const state = this.mlp.getNetworkState();
 
@@ -316,18 +443,17 @@ class CanvasRenderer {
                 for (let i = 0; i < state.layers[l]; i++) {
                     const from = this.neuronPositions[l][i];
                     const to = this.neuronPositions[l + 1][j];
+                    const delay = l * 45;
 
-                    // Stagger particles by layer
-                    const delay = l * 40;
-                    for (let p = 0; p < 3; p++) {
+                    for (let p = 0; p < 4; p++) {
                         this.particles.push({
-                            x: from.x, y: from.y,
+                            fromX: from.x, fromY: from.y,
                             targetX: to.x, targetY: to.y,
-                            progress: -(delay + p * 12) / 100,
-                            speed: 0.015 + Math.random() * 0.008,
+                            progress: -(delay + p * 10) / 100,
+                            speed: 0.016 + Math.random() * 0.006,
                             color: this.colors.particleForward,
-                            size: 3 + Math.random() * 2,
-                            layer: l
+                            size: 2 + Math.random() * 2.5,
+                            trail: []
                         });
                     }
                 }
@@ -337,63 +463,37 @@ class CanvasRenderer {
 
     spawnBackwardParticles() {
         this.animationPhase = 'backward';
+        this.showGradientFlow = true;
         this.particles = [];
         const state = this.mlp.getNetworkState();
 
         for (let l = state.layers.length - 2; l >= 0; l--) {
             for (let j = 0; j < state.layers[l + 1]; j++) {
                 for (let i = 0; i < state.layers[l]; i++) {
-                    const from = this.neuronPositions[l + 1][j]; // backward: from output side
+                    const from = this.neuronPositions[l + 1][j];
                     const to = this.neuronPositions[l][i];
+                    const delay = (state.layers.length - 2 - l) * 45;
 
-                    const delay = (state.layers.length - 2 - l) * 40;
-                    for (let p = 0; p < 3; p++) {
+                    // Particle size proportional to delta magnitude
+                    const deltaIdx = l;
+                    const delta = state.deltas[deltaIdx]?.[j];
+                    const absDelta = delta ? Math.abs(delta) : 0.1;
+                    const particleSize = 2 + Math.min(4, absDelta * 20);
+
+                    for (let p = 0; p < 4; p++) {
                         this.particles.push({
-                            x: from.x, y: from.y,
+                            fromX: from.x, fromY: from.y,
                             targetX: to.x, targetY: to.y,
-                            progress: -(delay + p * 12) / 100,
-                            speed: 0.015 + Math.random() * 0.008,
+                            progress: -(delay + p * 10) / 100,
+                            speed: 0.016 + Math.random() * 0.006,
                             color: this.colors.particleBackward,
-                            size: 3 + Math.random() * 2,
-                            layer: l
+                            size: particleSize + Math.random() * 1.5,
+                            trail: []
                         });
                     }
                 }
             }
         }
-    }
-
-    updateParticles() {
-        let aliveCount = 0;
-
-        for (const p of this.particles) {
-            p.progress += p.speed;
-
-            if (p.progress >= 0 && p.progress <= 1) {
-                const t = p.progress;
-                p.x = p.x + (p.targetX - (p.x - (p.targetX - p.x) * (t - p.speed) / (1 - (t - p.speed) + 0.001))) * 0;
-                // Simple linear interpolation
-                const startX = p.targetX - (p.targetX - p.x) / (t || 0.001) * t;
-                p.x = this._particleStartX(p) + (p.targetX - this._particleStartX(p)) * t;
-                p.y = this._particleStartY(p) + (p.targetY - this._particleStartY(p)) * t;
-            }
-
-            if (p.progress < 1.0) aliveCount++;
-        }
-
-        return aliveCount > 0;
-    }
-
-    _particleStartX(p) {
-        // Calculate the start position based on target and current position
-        // We stored targetX/targetY, so we need the original from position
-        // Let's recalculate: the from position was set when spawning
-        // We need to store it. Let me fix this with fromX/fromY.
-        return p.fromX || p.x;
-    }
-
-    _particleStartY(p) {
-        return p.fromY || p.y;
     }
 
     _drawParticles(ctx) {
@@ -404,75 +504,36 @@ class CanvasRenderer {
             const x = p.fromX + (p.targetX - p.fromX) * t;
             const y = p.fromY + (p.targetY - p.fromY) * t;
 
-            // Glow
-            const gradient = ctx.createRadialGradient(x, y, 0, x, y, p.size * 4);
+            // Store trail positions
+            p.trail.push({ x, y, alpha: 1 });
+            if (p.trail.length > 8) p.trail.shift();
+
+            // Draw trail
+            for (let i = 0; i < p.trail.length; i++) {
+                const tp = p.trail[i];
+                const ta = (i / p.trail.length) * 0.4;
+                ctx.beginPath();
+                ctx.arc(tp.x, tp.y, p.size * (0.3 + i / p.trail.length * 0.7), 0, Math.PI * 2);
+                ctx.fillStyle = p.color;
+                ctx.globalAlpha = ta;
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1.0;
+
+            // Main glow
+            const gradient = ctx.createRadialGradient(x, y, 0, x, y, p.size * 5);
             gradient.addColorStop(0, p.color);
             gradient.addColorStop(1, 'transparent');
             ctx.beginPath();
-            ctx.arc(x, y, p.size * 4, 0, Math.PI * 2);
+            ctx.arc(x, y, p.size * 5, 0, Math.PI * 2);
             ctx.fillStyle = gradient;
             ctx.fill();
 
-            // Core
+            // Core dot
             ctx.beginPath();
             ctx.arc(x, y, p.size, 0, Math.PI * 2);
             ctx.fillStyle = '#fff';
             ctx.fill();
-        }
-    }
-
-    // Fixed particle spawn with stored from positions
-    spawnForwardParticles() {
-        this.animationPhase = 'forward';
-        this.particles = [];
-        const state = this.mlp.getNetworkState();
-
-        for (let l = 0; l < state.layers.length - 1; l++) {
-            for (let j = 0; j < state.layers[l + 1]; j++) {
-                for (let i = 0; i < state.layers[l]; i++) {
-                    const from = this.neuronPositions[l][i];
-                    const to = this.neuronPositions[l + 1][j];
-                    const delay = l * 40;
-
-                    for (let p = 0; p < 3; p++) {
-                        this.particles.push({
-                            fromX: from.x, fromY: from.y,
-                            targetX: to.x, targetY: to.y,
-                            progress: -(delay + p * 12) / 100,
-                            speed: 0.018 + Math.random() * 0.008,
-                            color: this.colors.particleForward,
-                            size: 2.5 + Math.random() * 2
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    spawnBackwardParticles() {
-        this.animationPhase = 'backward';
-        this.particles = [];
-        const state = this.mlp.getNetworkState();
-
-        for (let l = state.layers.length - 2; l >= 0; l--) {
-            for (let j = 0; j < state.layers[l + 1]; j++) {
-                for (let i = 0; i < state.layers[l]; i++) {
-                    const from = this.neuronPositions[l + 1][j];
-                    const to = this.neuronPositions[l][i];
-                    const delay = (state.layers.length - 2 - l) * 40;
-
-                    for (let p = 0; p < 3; p++) {
-                        this.particles.push({
-                            fromX: from.x, fromY: from.y,
-                            targetX: to.x, targetY: to.y,
-                            progress: -(delay + p * 12) / 100,
-                            speed: 0.018 + Math.random() * 0.008,
-                            color: this.colors.particleBackward,
-                            size: 2.5 + Math.random() * 2
-                        });
-                    }
-                }
-            }
         }
     }
 
